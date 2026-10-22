@@ -24,6 +24,7 @@ STATE = ROOT / '.local-state.json'
 CREDENTIALS = ROOT / '.local-credentials.json'
 COOKIES = ROOT / '.cas-session.json'
 SUCCESS = {'submitted', 'already_checked'}
+NO_RESUBMIT = SUCCESS | {'submitted_unconfirmed'}
 
 
 def now():
@@ -75,7 +76,7 @@ def window(current):
 def make_plan(current, previous, choose=secrets.randbelow):
     date = current.date().isoformat()
     start, end = window(current)
-    if previous.get('date') == date and previous.get('phase') in SUCCESS:
+    if previous.get('date') == date and previous.get('phase') in NO_RESUBMIT:
         return previous
     if current > end:
         return {'date': date, 'phase': 'window_closed'}
@@ -147,7 +148,18 @@ def run_once(submit=False):
     result = client.submit(lng, lat, data['dkbc'], dkdz=os.environ.get('CHECKIN_DKDZ', ''))
     if str(result.get('code')) != '200':
         raise RuntimeError(f'打卡接口未返回成功，状态 {result.get("code")}；不自动重复提交。')
-    return {'phase': 'submitted', 'message': '学校接口返回打卡成功。'}
+    # 提交只执行一次；后续请求仅用于确认学校确实记录为已打卡。
+    for attempt in range(3):
+        try:
+            confirmation = client.query_dkbc(dklb)
+            details = confirmation.get('data')
+            if str(confirmation.get('code')) == '200' and isinstance(details, dict) and true(details.get('sfydk')):
+                return {'phase': 'submitted', 'message': '学校接口返回成功，复查确认今日已打卡。'}
+        except (requests.RequestException, ValueError):
+            pass
+        if attempt < 2:
+            time.sleep(1)
+    return {'phase': 'submitted_unconfirmed', 'message': '提交接口返回成功，但复查尚未确认已打卡；请人工检查，不自动重复提交。'}
 
 
 @contextmanager
@@ -164,9 +176,9 @@ def scheduled():
     with exclusive():
         state = make_plan(now(), read_json(STATE))
         write_json(STATE, state)
-        if state['phase'] == 'window_closed' or state['phase'] in SUCCESS:
-            log('今日窗口已结束，或已完成打卡，不再提交。')
-            return 0
+        if state['phase'] == 'window_closed' or state['phase'] in NO_RESUBMIT:
+            log('今日窗口已结束，或已有提交记录，不再提交。')
+            return 0 if state['phase'] in SUCCESS else 1
         target = datetime.fromisoformat(state['planned_at'])
         state['phase'] = 'waiting'
         write_json(STATE, state)
@@ -183,7 +195,7 @@ def scheduled():
         state['finished_at'] = now().isoformat()
         write_json(STATE, state)
         log(state.get('message', state['phase']))
-        return 1 if state['phase'] == 'failed' else 0
+        return 0 if state['phase'] in SUCCESS else 1
 
 
 def main():
@@ -211,7 +223,7 @@ def main():
         if args.submit:
             with exclusive():
                 previous = read_json(STATE)
-                if previous.get('date') == now().date().isoformat() and previous.get('phase') in SUCCESS:
+                if previous.get('date') == now().date().isoformat() and previous.get('phase') in NO_RESUBMIT:
                     log('本地记录显示今日已经完成，不重复提交。')
                     return 0
                 result = run_once(submit=True)

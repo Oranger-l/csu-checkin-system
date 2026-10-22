@@ -26,13 +26,14 @@ class LocalRunnerTests(unittest.TestCase):
         done = {'date': '2026-10-23', 'phase': 'submitted'}
         self.assertEqual(runner.make_plan(current, done), done)
 
-    def invoke(self, *, submit=False, can=True, kdk=True, already=0):
+    def invoke(self, *, submit=False, can=True, kdk=True, already=0, confirmed=True):
         client = Mock()
-        client.query_dkbc.return_value = {'code': '200', 'data': {'dkbc': 'test-shift', 'kdk': kdk, 'sfydk': already}}
+        initial = {'code': '200', 'data': {'dkbc': 'test-shift', 'kdk': kdk, 'sfydk': already}}
+        client.query_dkbc.side_effect = [initial] + [{'code': '200', 'data': {'sfydk': int(confirmed)}}] * 3
         client.check_range.return_value = {'code': '200', 'data': {'canDk': can}}
         client.submit.return_value = {'code': '200'}
-        with patch.dict(os.environ, {'CHECKIN_LNG': '112.947959', 'CHECKIN_LAT': '28.144836', 'CHECKIN_COORD': 'gcj02'}), \
-                patch.object(runner, 'load_environment'), patch.object(runner, 'get_auth', return_value=('test', 'test')), \
+        with patch.dict(os.environ, {'CHECKIN_LNG': '110.0', 'CHECKIN_LAT': '30.0', 'CHECKIN_COORD': 'gcj02'}), \
+                patch.object(runner.time, 'sleep'), patch.object(runner, 'load_environment'), patch.object(runner, 'get_auth', return_value=('test', 'test')), \
                 patch.object(runner, 'CheckinClient', return_value=client):
             result = runner.run_once(submit=submit)
         return result, client
@@ -40,7 +41,7 @@ class LocalRunnerTests(unittest.TestCase):
     def test_dry_run_checks_supplied_coordinates_and_never_submits(self):
         result, client = self.invoke()
         self.assertEqual(result['phase'], 'dry_run')
-        client.check_range.assert_called_once_with(112.947959, 28.144836, 'PA')
+        client.check_range.assert_called_once_with(110.0, 30.0, 'PA')
         client.submit.assert_not_called()
 
     def test_range_failure_never_submits(self):
@@ -61,7 +62,26 @@ class LocalRunnerTests(unittest.TestCase):
     def test_success_submits_once_at_supplied_location(self):
         result, client = self.invoke(submit=True)
         self.assertEqual(result['phase'], 'submitted')
-        client.submit.assert_called_once_with(112.947959, 28.144836, 'test-shift', dkdz='')
+        client.submit.assert_called_once_with(110.0, 30.0, 'test-shift', dkdz='')
+
+    def test_unconfirmed_submission_never_reposts(self):
+        result, client = self.invoke(submit=True, confirmed=False)
+        self.assertEqual(result['phase'], 'submitted_unconfirmed')
+        self.assertEqual(client.query_dkbc.call_count, 4)
+        self.assertEqual(client.submit.call_count, 1)
+        current = datetime(2026, 10, 23, 20, 18, tzinfo=runner.ZONE)
+        previous = {'date': current.date().isoformat(), **result}
+        self.assertEqual(runner.make_plan(current, previous), previous)
+
+    def test_closed_window_fails_daily_job_without_submitting(self):
+        from contextlib import nullcontext
+        current = datetime(2026, 10, 23, 20, 24, tzinfo=runner.ZONE)
+        with patch.object(runner, 'exclusive', return_value=nullcontext()), \
+                patch.object(runner, 'now', return_value=current), \
+                patch.object(runner, 'read_json', return_value={}), \
+                patch.object(runner, 'write_json'), patch.object(runner, 'run_once') as run:
+            self.assertEqual(runner.scheduled(), 1)
+        run.assert_not_called()
 
 
 if __name__ == '__main__':
