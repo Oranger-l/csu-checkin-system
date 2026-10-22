@@ -10,7 +10,7 @@
 - 使用配置的实际坐标；已打卡、时段不允许或位置校验失败时跳过提交。
 - 提交接口返回成功后，再查询确认今日已打卡；未确认时不会自动重复提交。
 - 每日任务只有确认已打卡（或学校本来就显示已打）才显示成功，错过窗口和其他未完成状态显示失败。
-- 可在 GitHub 个人通知设置开启 Actions 的 Email，并关闭“仅失败时通知”，接收成功和失败邮件。该设置影响账号下自己触发的工作流；手动验证成功不代表真实打卡成功。
+- 每日任务结束后通过 QQ SMTP 发送结果邮件。成功、尚未确认、未打卡和失败分别说明；手动邮件测试会明确标注未提交打卡。
 - GitHub 若没有触发任务，则该工作流本身也无法发送通知。
 - 密码、token、Cookie 和坐标统一放入 Actions Secret `CHECKIN_AUTH_JSON`，不能提交进仓库。
 - 初次迁移应手动验证云端登录。学校要求二次认证时需本人完成并更新认证记录。
@@ -37,3 +37,10 @@ python -m pip install -r requirements.txt
 python -m unittest discover -v
 python local_runner.py --dry-run
 ```
+
+## 邮件配置
+
+在本仓库 Actions Secrets 中配置 `MAIL_SMTP_USERNAME`（完整 QQ 邮箱地址）和 `MAIL_SMTP_PASSWORD`（QQ 邮箱授权码，非 QQ 登录密码）。
+邮件默认发到发信邮箱自身；使用 `smtp.qq.com:465`，强制 TLS 和证书校验。邮件不包含学校凭据和坐标。
+手动 Run workflow 时勾选 `notify_email` 可测试邮件，仍然不提交打卡。未勾选时仅验证学校登录与查询。
+SMTP 接受发送不等于收件箱必然收到；首次部署需验证收件。邮件错误独立显示，不会重新提交打卡。
