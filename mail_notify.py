@@ -14,7 +14,7 @@ LABELS = {
     'submitted': '打卡成功（已复查）',
     'already_checked': '今日已打卡',
     'submitted_unconfirmed': '提交后尚未确认，请检查',
-    'window_closed': '错过打卡窗口，未打卡',
+    'window_closed': '任务等待期间跨日，未打卡',
     'outside_period': '学校当前不允许打卡，未打卡',
     'out_of_range': '位置校验未通过，未打卡',
     'failed': '任务失败，请检查',

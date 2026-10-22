@@ -78,14 +78,14 @@ def make_plan(current, previous, choose=secrets.randbelow):
     start, end = window(current)
     if previous.get('date') == date and previous.get('phase') in NO_RESUBMIT:
         return previous
-    if current > end:
-        return {'date': date, 'phase': 'window_closed'}
     if previous.get('date') == date and previous.get('planned_at'):
         selected = datetime.fromisoformat(previous['planned_at'])
-        if start <= selected <= end:
+        if start <= selected <= max(end, current):
             return previous
     earliest = max(start, current.replace(microsecond=0) + timedelta(seconds=bool(current.microsecond)))
-    selected = earliest + timedelta(seconds=choose(int((end - earliest).total_seconds()) + 1))
+    # 20:23 仅是随机等待的终点；延迟启动不再因超过它而放弃。
+    selected = (earliest if earliest >= end else
+                earliest + timedelta(seconds=choose(int((end - earliest).total_seconds()) + 1)))
     return {'date': date, 'planned_at': selected.isoformat(), 'phase': 'planned'}
 
 
@@ -176,8 +176,8 @@ def scheduled():
     with exclusive():
         state = make_plan(now(), read_json(STATE))
         write_json(STATE, state)
-        if state['phase'] == 'window_closed' or state['phase'] in NO_RESUBMIT:
-            log('今日窗口已结束，或已有提交记录，不再提交。')
+        if state.get('phase') in NO_RESUBMIT:
+            log('今日已有提交记录，不再重复提交。')
             return 0 if state['phase'] in SUCCESS else 1
         target = datetime.fromisoformat(state['planned_at'])
         state['phase'] = 'waiting'
@@ -185,8 +185,8 @@ def scheduled():
         log('今日随机执行时间：' + target.isoformat(timespec='seconds'))
         while now() < target:
             time.sleep(min(30, max(0, (target - now()).total_seconds())))
-        if now() > window(now())[1] or now().date().isoformat() != state['date']:
-            state.update(phase='window_closed', message='电脑唤醒时已错过当日窗口，未补交。')
+        if now().date().isoformat() != state['date']:
+            state.update(phase='window_closed', message='任务等待期间已跨日，不提交上一日的打卡。')
         else:
             try:
                 state.update(run_once(submit=True))

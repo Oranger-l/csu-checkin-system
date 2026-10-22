@@ -20,9 +20,10 @@ class LocalRunnerTests(unittest.TestCase):
         plan = runner.make_plan(current, {}, choose=lambda n: 0)
         self.assertGreaterEqual(datetime.fromisoformat(plan['planned_at']), current)
 
-    def test_closed_window_is_skipped_and_success_is_preserved(self):
+    def test_late_start_runs_immediately_and_success_is_preserved(self):
         current = datetime(2026, 10, 23, 23, 0, tzinfo=runner.ZONE)
-        self.assertEqual(runner.make_plan(current, {})['phase'], 'window_closed')
+        plan = runner.make_plan(current, {}, choose=Mock(side_effect=AssertionError('不应继续随机等待')))
+        self.assertEqual(datetime.fromisoformat(plan['planned_at']), current)
         done = {'date': '2026-10-23', 'phase': 'submitted'}
         self.assertEqual(runner.make_plan(current, done), done)
 
@@ -73,14 +74,58 @@ class LocalRunnerTests(unittest.TestCase):
         previous = {'date': current.date().isoformat(), **result}
         self.assertEqual(runner.make_plan(current, previous), previous)
 
-    def test_closed_window_fails_daily_job_without_submitting(self):
+    def run_scheduled_at(self, current, previous=None, result=None):
         from contextlib import nullcontext
-        current = datetime(2026, 10, 23, 20, 24, tzinfo=runner.ZONE)
         with patch.object(runner, 'exclusive', return_value=nullcontext()), \
                 patch.object(runner, 'now', return_value=current), \
-                patch.object(runner, 'read_json', return_value={}), \
-                patch.object(runner, 'write_json'), patch.object(runner, 'run_once') as run:
+                patch.object(runner, 'read_json', return_value=previous or {}), \
+                patch.object(runner, 'write_json'), patch.object(runner, 'run_once', return_value=result or {'phase': 'submitted'}) as run:
+            status = runner.scheduled()
+        return status, run
+
+    def test_delayed_job_attempts_after_2023(self):
+        current = datetime(2026, 10, 23, 20, 24, tzinfo=runner.ZONE)
+        status, run = self.run_scheduled_at(current)
+        self.assertEqual(status, 0)
+        run.assert_called_once_with(submit=True)
+
+    def test_old_window_closed_state_is_recoverable(self):
+        current = datetime(2026, 10, 23, 21, 0, tzinfo=runner.ZONE)
+        status, run = self.run_scheduled_at(current, {'date': '2026-10-23', 'phase': 'window_closed'})
+        self.assertEqual(status, 0)
+        run.assert_called_once_with(submit=True)
+
+    def test_late_wakeup_executes_existing_plan(self):
+        current = datetime(2026, 10, 23, 21, 0, tzinfo=runner.ZONE)
+        previous = {'date': '2026-10-23', 'planned_at': '2026-10-23T20:20:00+08:00', 'phase': 'waiting'}
+        status, run = self.run_scheduled_at(current, previous)
+        self.assertEqual(status, 0)
+        run.assert_called_once_with(submit=True)
+
+    def test_delayed_job_respects_school_closed_result(self):
+        current = datetime(2026, 10, 23, 23, 45, tzinfo=runner.ZONE)
+        status, run = self.run_scheduled_at(current, result={'phase': 'outside_period'})
+        self.assertEqual(status, 1)
+        run.assert_called_once_with(submit=True)
+
+    def test_waiting_across_midnight_never_submits(self):
+        from contextlib import nullcontext
+        start = datetime(2026, 10, 23, 20, 13, tzinfo=runner.ZONE)
+        next_day = datetime(2026, 10, 24, 0, 0, tzinfo=runner.ZONE)
+        previous = {'date': '2026-10-23', 'planned_at': '2026-10-23T20:20:00+08:00'}
+        with patch.object(runner, 'exclusive', return_value=nullcontext()), \
+                patch.object(runner, 'now', side_effect=[start, next_day, next_day, next_day]), \
+                patch.object(runner, 'read_json', return_value=previous), \
+                patch.object(runner, 'write_json') as write, patch.object(runner, 'log'), \
+                patch.object(runner, 'run_once') as run:
             self.assertEqual(runner.scheduled(), 1)
+        run.assert_not_called()
+        self.assertEqual(write.call_args.args[1]['phase'], 'window_closed')
+
+    def test_late_same_day_submission_is_not_repeated(self):
+        current = datetime(2026, 10, 23, 21, 0, tzinfo=runner.ZONE)
+        status, run = self.run_scheduled_at(current, {'date': '2026-10-23', 'phase': 'submitted'})
+        self.assertEqual(status, 0)
         run.assert_not_called()
 
 
