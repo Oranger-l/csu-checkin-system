@@ -5,7 +5,7 @@ import json
 import re
 import string
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 import urllib3
@@ -38,41 +38,41 @@ def cas_login(username, password, session=None):
 
     print("[登录 1/4] 访问 CAS 登录页 ...")
     try:
-        html = session.get(login_url, timeout=20).text
+        response = session.get(login_url, timeout=20)
     except requests.RequestException as exc:
         raise LoginError(f"无法访问 CAS 登录页：{exc}")
-    salt = _re_group(r'id="pwdEncryptSalt" value="([^"]*)"', html)
-    execution = _re_group(r'name="execution" value="([^"]*)"', html)
-    if not salt:
-        raise LoginError("未在登录页解析到 pwdEncryptSalt")
-    if not execution:
-        raise LoginError("未在登录页解析到 execution")
-
-    print("[登录 2/4] 提交账号密码 ...")
-    data = {
-        "username": username,
-        "password": encrypt_cas_password(password, salt),
-        "captcha": "",
-        "_eventId": "submit",
-        "lt": "",
-        "cllt": "userNameLogin",
-        "dllt": "generalLogin",
-        "execution": execution,
-    }
-    try:
-        response = session.post(login_url, data=data, allow_redirects=False, timeout=20)
-    except requests.RequestException as exc:
-        raise LoginError(f"提交 CAS 登录失败：{exc}")
-    match = re.search(r"[?&]ticket=([^&]+)", response.headers.get("Location", ""))
-    if response.status_code not in (302, 303) or not match:
-        raise LoginError("CAS 登录失败，未获取到 ticket（账号或密码错误，或连续失败触发验证码）")
-    ticket = match.group(1)
-
+    # 已有有效 SSO 记录时，CAS 会直接跳转到学校的业务回调。
+    target = urlsplit(response.url)
+    trusted_callback = (target.scheme == "https" and target.hostname == "zhxg.csu.edu.cn"
+                        and target.path == "/fdcwonsun/caslogin_h5.jsp")
+    if trusted_callback:
+        print("[登录 2/4] 已有统一认证登录态，使用学校回调 ...")
+    else:
+        html = response.text
+        salt = _re_group(r'id="pwdEncryptSalt" value="([^"]*)"', html)
+        execution = _re_group(r'name="execution" value="([^"]*)"', html)
+        if not salt or not execution:
+            raise LoginError(f"学校未返回可识别的登录表单（HTTP {response.status_code}，站点 {target.hostname}）")
+        print("[登录 2/4] 提交账号密码 ...")
+        data = {
+            "username": username,
+            "password": encrypt_cas_password(password, salt),
+            "captcha": "", "_eventId": "submit", "lt": "",
+            "cllt": "userNameLogin", "dllt": "generalLogin", "execution": execution,
+        }
+        try:
+            response = session.post(login_url, data=data, allow_redirects=False, timeout=20)
+        except requests.RequestException as exc:
+            raise LoginError(f"提交 CAS 登录失败：{exc}")
+        match = re.search(r"[?&]ticket=([^&]+)", response.headers.get("Location", ""))
+        if response.status_code not in (302, 303) or not match:
+            raise LoginError("CAS 登录失败，未获取到 ticket（账号或密码错误，或需要本人二次认证）")
+        ticket = match.group(1)
+        try:
+            response = session.get(CAS_H5_SERVICE + "?ticket=" + quote(ticket, safe=""), allow_redirects=True, timeout=20)
+        except requests.RequestException as exc:
+            raise LoginError(f"访问 caslogin_h5.jsp 失败：{exc}")
     print("[登录 3/4] 换取 uid / lzc ...")
-    try:
-        response = session.get(CAS_H5_SERVICE + "?ticket=" + quote(ticket, safe=""), allow_redirects=True, timeout=20)
-    except requests.RequestException as exc:
-        raise LoginError(f"访问 caslogin_h5.jsp 失败：{exc}")
     uid = _re_group(r"var uid = '([^']+)'", response.text)
     lzc = _re_group(r"var lzc = '([^']+)'", response.text)
     if not uid or not lzc:
