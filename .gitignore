@@ -1,0 +1,11 @@
+checkin_config.json
+.cas-session.json
+.local-credentials.json
+.local-state.json
+.local-state.lock
+.env
+*.tmp
+__pycache__/
+*.py[cod]
+.venv/
+logs/
