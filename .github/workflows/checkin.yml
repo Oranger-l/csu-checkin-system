@@ -1,4 +1,5 @@
 name: 平安打卡
+run-name: ${{ github.event_name == 'schedule' && '每日平安打卡' || '手动验证与邮件测试（不提交打卡）' }}
 on:
   schedule:
     - cron: '13 12 * * *'
@@ -8,6 +9,10 @@ on:
         description: '验证云端重新登录（不提交打卡）'
         type: boolean
         default: true
+      notify_email:
+        description: '发送一封邮件测试通知（不提交打卡）'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -41,3 +46,10 @@ jobs:
         env:
           CHECKIN_AUTH_JSON: ${{ secrets.CHECKIN_AUTH_JSON }}
         run: python cloud_runner.py --scheduled
+      - name: 邮件通知
+        if: always() && (github.event_name == 'schedule' || inputs.notify_email)
+        env:
+          SMTP_USERNAME: ${{ secrets.MAIL_SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.MAIL_SMTP_PASSWORD }}
+          CHECKIN_JOB_STATUS: ${{ job.status }}
+        run: python mail_notify.py
