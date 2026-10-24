@@ -89,6 +89,20 @@ class LocalRunnerTests(unittest.TestCase):
         self.assertEqual(status, 0)
         run.assert_called_once_with(submit=True)
 
+    def test_previous_day_cloud_schedule_does_not_wait_until_evening(self):
+        from contextlib import nullcontext
+        current = datetime(2026, 10, 24, 1, 1, tzinfo=runner.ZONE)
+        with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(runner, 'exclusive', return_value=nullcontext()), \
+                patch.object(runner, 'now', return_value=current), \
+                patch.object(runner, 'write_json') as write, \
+                patch.object(runner.time, 'sleep') as sleep, \
+                patch.object(runner, 'run_once') as run:
+            self.assertEqual(runner.scheduled(), 1)
+        self.assertEqual(write.call_args.args[1]['phase'], 'missed_schedule')
+        sleep.assert_not_called()
+        run.assert_not_called()
+
     def test_old_window_closed_state_is_recoverable(self):
         current = datetime(2026, 10, 23, 21, 0, tzinfo=runner.ZONE)
         status, run = self.run_scheduled_at(current, {'date': '2026-10-23', 'phase': 'window_closed'})
