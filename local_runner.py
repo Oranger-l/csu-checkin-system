@@ -174,7 +174,19 @@ def exclusive():
 
 def scheduled():
     with exclusive():
-        state = make_plan(now(), read_json(STATE))
+        current = now()
+        start, _ = window(current)
+        # GitHub may deliver yesterday's scheduled event after midnight.  Its
+        # runner cannot wait until this evening under the 30-minute job limit.
+        if (os.environ.get('GITHUB_EVENT_NAME') == 'schedule'
+                and current < start - timedelta(minutes=1)):
+            state = {'date': current.date().isoformat(), 'phase': 'missed_schedule',
+                     'finished_at': current.isoformat(),
+                     'message': '定时任务在今日打卡时段前启动，可能是前一日延迟触发；本次未提交。'}
+            write_json(STATE, state)
+            log(state['message'])
+            return 1
+        state = make_plan(current, read_json(STATE))
         write_json(STATE, state)
         if state.get('phase') in NO_RESUBMIT:
             log('今日已有提交记录，不再重复提交。')
