@@ -1,6 +1,6 @@
 # CSU 平安打卡
 
-基于 [IAMNAVY/fuck-csu-checkin](https://github.com/IAMNAVY/fuck-csu-checkin) 的 Python 3.12 项目，使用 GitHub Actions 定时运行，完成后通过 QQ SMTP 发送结果邮件。云端部署后无需个人电脑开机或浏览器常驻。
+基于 [IAMNAVY/fuck-csu-checkin](https://github.com/IAMNAVY/fuck-csu-checkin) 的 Python 3.12 项目。当前 Fork 已关闭定时打卡和邮件通知；GitHub Actions 仅保留手动只查询验证。
 
 ## 复用与部署
 
@@ -8,7 +8,7 @@
 
 Fork 到自己的 GitHub 账号，在自己的仓库打开 **Actions**，按页面提示启用工作流。配置在自己的仓库完成，无需修改 Python 源码。
 
-Fork 不会复制原仓库的 Secrets；下面的学校凭据、邮箱和开关都要自行配置，不能复用其他人的认证信息。
+Fork 不会复制原仓库的 Secrets；学校凭据需自行配置，不能复用其他人的认证信息。
 
 ### 2. 配置 Secrets 和 Variables
 
@@ -17,11 +17,8 @@ Fork 不会复制原仓库的 Secrets；下面的学校凭据、邮箱和开关�
 | 名称 | 添加位置 | 内容 |
 | --- | --- | --- |
 | `CHECKIN_AUTH_JSON` | **Secrets → New repository secret** | 自己的学校认证与实际位置 JSON，格式见下文 |
-| `MAIL_SMTP_USERNAME` | **Secrets → New repository secret** | 自己的完整 QQ 邮箱地址，例如 `your-address@qq.com` |
-| `MAIL_SMTP_PASSWORD` | **Secrets → New repository secret** | QQ 邮箱 SMTP 授权码，不是 QQ 登录密码 |
-| `CHECKIN_ENABLED` | **Variables → New repository variable** | 初次配置填 `false`，验证通过后改为 `true` |
 
-**`CHECKIN_ENABLED` 必须是仓库变量（Variable），填在 Secrets 中不会启用定时打卡。** 值使用小写 `true`，不要加引号、空格，也不要把整句 `CHECKIN_ENABLED=true` 填进值框。未配置、填 `false` 或其他值时，定时任务跳过；手动只查询验证仍可运行。
+旧版的 `CHECKIN_ENABLED` 变量及邮件 Secrets 即使仍保留，当前工作流也不会读取它们。
 
 ### 3. 配置自己的学校认证
 
@@ -53,35 +50,16 @@ Fork 不会复制原仓库的 Secrets；下面的学校凭据、邮箱和开关�
 
 Cookie 使用对象数组，每项保留 `name`、`value`、`domain`、`path`。只加载 `ca.csu.edu.cn` 和 `zhxg.csu.edu.cn` 的记录；同名 Cookie 也要保留各自域名和路径，不能合并。认证摘要或显示“已配置”的核对报告不能替代这些真实配置。
 
-### 4. 配置 QQ SMTP 并验证
+### 4. 手动只查询验证
 
-在自己的 QQ 邮箱网页版设置中找到 POP3/IMAP/SMTP 服务，开启 SMTP 并生成授权码（通常位于账号与安全相关设置，入口名称可能调整）。将完整邮箱和授权码分别存入上表两个邮件 Secrets。
+进入 **Actions → 平安打卡 → Run workflow**，选择默认分支运行。`verify_login` 默认开启，用于验证云端重新登录。此工作流只查询学校状态，不提交打卡，也不发送邮件。
 
-当前工作流使用 **QQ 邮箱 `smtp.qq.com:465`**，强制 TLS 和证书校验；邮件发往发信邮箱自身。直接填写 Gmail、163 邮箱不会切换 SMTP 服务商；当前无需设置 `SMTP_HOST`、`SMTP_PORT` 或 `MAIL_TO`。
+## 当前运行方式
 
-进入 **Actions → 平安打卡 → Run workflow**，选择默认分支，并勾选：
-
-- `verify_login`：验证云端重新登录，默认开启。
-- `notify_email`：发送测试邮件，默认关闭，首次部署请开启。
-
-确认日志显示云端登录、查询成功，并实际收到标注“邮件测试与只查询验证”的邮件。**手动运行始终不提交打卡，测试邮件和绿色状态均不代表今日已打卡。** SMTP 接受发送也不等于已送达，首次需检查收件箱及垃圾邮件。
-
-### 5. 启用或暂停每天自动运行
-
-验证通过后，在 **Variables** 中将 `CHECKIN_ENABLED` 改为 `true`，保存后即启用后续定时任务；不需要改代码，也不需要保持电脑开机。暂停后续定时任务时改回 `false`；这不会取消已经开始的运行，如需停止当次运行请在 Actions 页面取消。
-
-云端验证成功后，停用其他设备的同类定时任务，避免重复运行。
-
-## 执行时间与结果
-
-- 每天北京时间 **20:13、20:43、21:13、21:43** 计划触发。首个准时启动的任务在 **20:13–20:23** 内随机执行；后续任务启动后立即查询学校状态，已打卡时不重复提交。设置多次触发是为了降低 GitHub 定时任务延迟或漏触发造成的失败概率，可能会收到多封状态邮件。
-- **20:23 只是随机等待终点。** 当天延迟启动或恢复时立即尝试，仍以学校接口返回的允许时段和范围为准；若 GitHub 将前一日的定时任务延迟到次日打卡窗口前，任务会立即报错并发出通知，不会在云端等待一整天或补交前一天。
-- 使用配置的实际坐标；已打卡、时段不允许或位置校验失败时跳过提交。
-- 提交接口返回成功后，再查询确认今日已打卡；未确认时不会自动重复提交。每日任务只有确认已打卡（或学校本来就显示已打）才显示成功，其余未完成状态显示失败。
-- 每日任务结束后发邮件说明成功、尚未确认、未打卡或失败。邮件不包含学校凭据和坐标；发信错误单独显示，不会因此重新提交打卡。
-- GitHub 调度可能延迟或未触发，任务也可能被取消、超时；不能保证固定时间执行或收到邮件。若任务根本没触发，该工作流也无法发邮件，未收到邮件不能视为成功。
+- GitHub Actions 没有定时触发器；只有用户手动运行时才会执行只查询验证。
+- 工作流没有邮件步骤，不会读取已保存的 QQ SMTP Secrets。
+- 本地 `local_runner.py --scheduled` 和 `--submit` 仍是手动可调用的真实打卡命令，请勿误用。
 - 学校要求重新二次认证时，需本人完成并更新 `CHECKIN_AUTH_JSON`，之后重新进行只查询验证。
-- 云端随机等待会计入任务运行时长；私有仓库需留意 Actions 分钟额度。代码不会主动开启付费预算。
 
 ## 本地检查
 
